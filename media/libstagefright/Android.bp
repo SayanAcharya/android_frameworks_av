@@ -70,6 +70,13 @@ cc_library_shared {
         "avc_utils.cpp",
     ],
 
+    include_dirs: [
+        "frameworks/native/include/media/openmax",
+        "frameworks/av/media/libavextensions",
+        "frameworks/av/media/libstagefright/mpeg2ts",
+        "frameworks/native/include/media/hardware",
+    ],
+
     shared_libs: [
         "libaudioutils",
         "libbinder",
@@ -123,6 +130,7 @@ cc_library_shared {
         "libstagefright_mpeg2ts",
         "libstagefright_id3",
         "libFLAC",
+        "libavextensions",
     ],
 
     export_shared_lib_headers: [

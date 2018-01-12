@@ -957,15 +957,14 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevice(
         goto non_direct_output;
     }
 
-    // Do not allow offloading if one non offloadable effect is enabled or MasterMono is enabled.
-    // This prevents creating an offloaded track and tearing it down immediately after start
+    // Do not allow Direct Output if one non offloadable effect is enabled or MasterMono is enabled.
+    // This prevents creating an direct track and tearing it down immediately after start
     // when audioflinger detects there is an active non offloadable effect.
     // FIXME: We should check the audio session here but we do not have it in this context.
     // This may prevent offloading in rare situations where effects are left active by apps
     // in the background.
 
-    if (((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) == 0) ||
-            !(mEffects.isNonOffloadableEffectEnabled() || mMasterMono)) {
+    if (!(mEffects.isNonOffloadableEffectEnabled() || mMasterMono)) {
         profile = getProfileForDirectOutput(device,
                                            samplingRate,
                                            format,
@@ -2329,9 +2328,10 @@ audio_io_handle_t AudioPolicyManager::selectOutputForMusicEffects()
     // 1: An offloaded output. If the effect ends up not being offloadable,
     //    AudioFlinger will invalidate the track and the offloaded output
     //    will be closed causing the effect to be moved to a PCM output.
-    // 2: A deep buffer output
-    // 3: The primary output
-    // 4: the first output in the list
+    // 2: Non offloaded Direct output
+    // 3: A deep buffer output
+    // 4: The primary output
+    // 5: the first output in the list
 
     routing_strategy strategy = getStrategy(AUDIO_STREAM_MUSIC);
     audio_devices_t device = getDeviceForStrategy(strategy, false /*fromCache*/);
@@ -2346,6 +2346,7 @@ audio_io_handle_t AudioPolicyManager::selectOutputForMusicEffects()
 
     while (output == AUDIO_IO_HANDLE_NONE) {
         audio_io_handle_t outputOffloaded = AUDIO_IO_HANDLE_NONE;
+        audio_io_handle_t outputDirect = AUDIO_IO_HANDLE_NONE;
         audio_io_handle_t outputDeepBuffer = AUDIO_IO_HANDLE_NONE;
         audio_io_handle_t outputPrimary = AUDIO_IO_HANDLE_NONE;
 
@@ -2359,6 +2360,9 @@ audio_io_handle_t AudioPolicyManager::selectOutputForMusicEffects()
             if ((desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) != 0) {
                 outputOffloaded = outputs[i];
             }
+            if ((desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) != 0) {
+                outputDirect = outputs[i];
+            }
             if ((desc->mFlags & AUDIO_OUTPUT_FLAG_DEEP_BUFFER) != 0) {
                 outputDeepBuffer = outputs[i];
             }
@@ -2368,6 +2372,8 @@ audio_io_handle_t AudioPolicyManager::selectOutputForMusicEffects()
         }
         if (outputOffloaded != AUDIO_IO_HANDLE_NONE) {
             output = outputOffloaded;
+        } else if (outputDirect != AUDIO_IO_HANDLE_NONE) {
+            output = outputDirect;
         } else if (outputDeepBuffer != AUDIO_IO_HANDLE_NONE) {
             output = outputDeepBuffer;
         } else if (outputPrimary != AUDIO_IO_HANDLE_NONE) {
@@ -3474,7 +3480,8 @@ status_t AudioPolicyManager::setMasterMono(bool mono)
         Vector<audio_io_handle_t> offloaded;
         for (size_t i = 0; i < mOutputs.size(); ++i) {
             sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
-            if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
+            if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD ||
+                desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) {
                 offloaded.push(desc->mIoHandle);
             }
         }
@@ -4600,7 +4607,7 @@ void AudioPolicyManager::checkOutputForStrategy(routing_strategy strategy)
 {
     audio_devices_t oldDevice = getDeviceForStrategy(strategy, true /*fromCache*/);
     audio_devices_t newDevice = getDeviceForStrategy(strategy, false /*fromCache*/);
-    SortedVector<audio_io_handle_t> srcOutputs = getOutputsForDevice(oldDevice, mPreviousOutputs);
+    SortedVector<audio_io_handle_t> srcOutputs = getOutputsForDevice(oldDevice, mOutputs);
     SortedVector<audio_io_handle_t> dstOutputs = getOutputsForDevice(newDevice, mOutputs);
 
     // also take into account external policy-related changes: add all outputs which are
@@ -4793,7 +4800,11 @@ audio_devices_t AudioPolicyManager::getNewInputDevice(const sp<AudioInputDescrip
     }
 
     audio_source_t source = inputDesc->getHighestPrioritySource(true /*activeOnly*/);
-    if (isInCall()) {
+    // Check for source AUDIO_SOURCE_VOICE_UPLINK when in call.
+    // Device switch during in call record use case returns built-in mic
+    // as new device which is not supported on primary input.
+    // Avoid this by retrieving device based on highest priority source.
+    if (isInCall() && !(source == AUDIO_SOURCE_VOICE_UPLINK)) {
         device = getDeviceAndMixForInputSource(AUDIO_SOURCE_VOICE_COMMUNICATION);
     } else if (source != AUDIO_SOURCE_DEFAULT) {
         device = getDeviceAndMixForInputSource(source);
@@ -5317,7 +5328,25 @@ sp<IOProfile> AudioPolicyManager::getInputProfile(audio_devices_t device,
                                              &format /*updatedFormat*/,
                                              channelMask,
                                              &channelMask /*updatedChannelMask*/,
-                                             (audio_output_flags_t) flags)) {
+                                             (audio_output_flags_t) flags,
+                                             true)) {
+
+                return profile;
+            }
+        }
+
+        for (size_t j = 0; j < mHwModules[i]->mInputProfiles.size(); j++)
+        {
+            sp<IOProfile> profile = mHwModules[i]->mInputProfiles[j];
+            // profile->log();
+            if (profile->isCompatibleProfile(device, address, samplingRate,
+                                             &samplingRate /*updatedSamplingRate*/,
+                                             format,
+                                             &format /*updatedFormat*/,
+                                             channelMask,
+                                             &channelMask /*updatedChannelMask*/,
+                                             (audio_output_flags_t) flags,
+                                              false)) {
 
                 return profile;
             }

@@ -30,9 +30,11 @@ class MetaData;
 class MediaExtractor : public BnMediaExtractor {
 public:
     static sp<IMediaExtractor> Create(
-            const sp<DataSource> &source, const char *mime = NULL);
+            const sp<DataSource> &source, const char *mime = NULL,
+            const uint32_t flags = 0);
     static sp<MediaExtractor> CreateFromService(
-            const sp<DataSource> &source, const char *mime = NULL);
+            const sp<DataSource> &source, const char *mime = NULL,
+            const uint32_t flags = 0);
 
     virtual size_t countTracks() = 0;
     virtual sp<IMediaSource> getTrack(size_t index) = 0;
@@ -72,6 +74,11 @@ public:
 
     virtual const char * name() { return "<unspecified>"; }
 
+    typedef bool (*SnifferFunc)(
+            const sp<DataSource> &source, String8 *mimeType,
+            float *confidence, sp<AMessage> *meta);
+
+    virtual void setExtraFlags(uint32_t) {}
     virtual void release() {}
 
 protected:
@@ -83,10 +90,6 @@ protected:
     virtual void populateMetrics();
 
 private:
-
-    typedef bool (*SnifferFunc)(
-            const sp<DataSource> &source, String8 *mimeType,
-            float *confidence, sp<AMessage> *meta);
 
     static Mutex gSnifferMutex;
     static List<SnifferFunc> gSniffers;
@@ -104,6 +107,10 @@ private:
 
     MediaExtractor(const MediaExtractor &);
     MediaExtractor &operator=(const MediaExtractor &);
+
+    static sp<IMediaExtractor> CreateImp(
+            const sp<DataSource> &source, const char *mime,
+            const uint32_t flags);
 };
 
 }  // namespace android

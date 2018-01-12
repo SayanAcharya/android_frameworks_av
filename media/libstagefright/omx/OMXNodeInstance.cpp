@@ -47,6 +47,8 @@
 
 static const OMX_U32 kPortIndexInput = 0;
 static const OMX_U32 kPortIndexOutput = 1;
+static const OMX_U32 kPortIndexInputExtradata = 2;
+static const OMX_U32 kPortIndexOutputExtradata = 3;
 
 #define CLOGW(fmt, ...) ALOGW("[%p:%s] " fmt, mHandle, mName, ##__VA_ARGS__)
 
@@ -137,7 +139,7 @@ struct BufferMeta {
         }
 
         // check component returns proper range
-        sp<ABuffer> codec = getBuffer(header, true /* limit */);
+        sp<ABuffer> codec = getBuffer(header,!(header->nFlags & OMX_BUFFERFLAG_EXTRADATA));
 
         memcpy(getPointer() + header->nOffset, codec->data(), codec->size());
     }
@@ -147,9 +149,11 @@ struct BufferMeta {
             return;
         }
 
+        size_t bytesToCopy = header->nFlags & OMX_BUFFERFLAG_EXTRADATA ?
+            header->nAllocLen - header->nOffset : header->nFilledLen;
         memcpy(header->pBuffer + header->nOffset,
                 getPointer() + header->nOffset,
-                header->nFilledLen);
+                bytesToCopy);
     }
 
     // return the codec buffer
@@ -364,10 +368,14 @@ OMXNodeInstance::OMXNodeInstance(
     DEBUG_BUMP = DEBUG;
     mNumPortBuffers[0] = 0;
     mNumPortBuffers[1] = 0;
+    mNumPortBuffers[2] = 0;
+    mNumPortBuffers[3] = 0;
     mDebugLevelBumpPendingBuffers[0] = 0;
     mDebugLevelBumpPendingBuffers[1] = 0;
     mMetadataType[0] = kMetadataBufferTypeInvalid;
     mMetadataType[1] = kMetadataBufferTypeInvalid;
+    mMetadataType[2] = kMetadataBufferTypeInvalid;
+    mMetadataType[3] = kMetadataBufferTypeInvalid;
     mPortMode[0] = IOMX::kPortModePresetByteBuffer;
     mPortMode[1] = IOMX::kPortModePresetByteBuffer;
     mSecureBufferType[0] = kSecureBufferTypeUnknown;
@@ -376,6 +384,9 @@ OMXNodeInstance::OMXNodeInstance(
     mGraphicBufferEnabled[1] = false;
     mIsSecure = AString(name).endsWith(".secure");
     mLegacyAdaptiveExperiment = ADebug::isExperimentEnabled("legacy-adaptive");
+    if (!strcmp(mName, "qcom.encoder.tme")) {
+        mQuirks = kRequiresAllocateBufferOnInputPorts | kRequiresAllocateBufferOnInputPorts;
+    }
 }
 
 OMXNodeInstance::~OMXNodeInstance() {
@@ -500,6 +511,9 @@ status_t OMXNodeInstance::freeNode() {
 
     Mutex::Autolock _l(mLock);
 
+    if (mActiveBuffers.size() > 0) {
+        freeActiveBuffers();
+    }
     status_t err = mOwner->freeNode(this);
 
     mDispatcher.clear();
@@ -1140,7 +1154,9 @@ status_t OMXNodeInstance::useBuffer_l(
             : kRequiresAllocateBufferOnOutputPorts;
 
     // we use useBuffer for output metadata regardless of quirks
-    if (!isOutputGraphicMetadata && (mQuirks & requiresAllocateBufferBit)) {
+    if (!isOutputGraphicMetadata && (mQuirks & requiresAllocateBufferBit) &&
+            portIndex != kPortIndexOutputExtradata &&
+            portIndex != kPortIndexInputExtradata) {
         // metadata buffers are not connected cross process; only copy if not meta.
         buffer_meta = new BufferMeta(
                     params, hParams, portIndex, !isMetadata /* copy */, NULL /* data */);
@@ -1948,6 +1964,9 @@ status_t OMXNodeInstance::setQuirks(OMX_U32 quirks) {
         return BAD_VALUE;
     }
 
+    if (!strcmp(mName, "qcom.encoder.tme")) {
+        quirks = kRequiresAllocateBufferOnInputPorts | kRequiresAllocateBufferOnOutputPorts;
+    }
     mQuirks = quirks;
 
     return OK;
